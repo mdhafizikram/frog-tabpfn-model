@@ -1,0 +1,23 @@
+{
+  "name": "tabpfn-fraud-detection",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "sst dev --stage hikramul",
+    "deploy": "sst deploy --stage hikramul",
+    "deploy:prod": "sst deploy --stage production",
+    "remove": "sst remove --stage hikramul"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sagemaker-runtime": "^3.700.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@pulumi/aws": "^6.0.0",
+    "@pulumi/docker": "^4.0.0",
+    "@pulumi/pulumi": "^3.0.0",
+    "sst": "^3.17.25",
+    "typescript": "^5.0.0"
+  },
+  "packageManager": "pnpm@10.19.0"
+}

@@ -1,0 +1,3 @@
+#!/bin/bash
+# SageMaker serve script
+exec python /opt/program/serve.py

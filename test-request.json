@@ -1,0 +1,38 @@
+{
+  "data": [
+    {
+      "nameRiskLevel": "medium",
+      "phoneLevel": "medium",
+      "addressRiskLevel": "medium",
+      "phoneEmailMatch": "nomatch",
+      "phoneDobMatch": "nomatch",
+      "phoneCityMatch": "nomatch",
+      "phoneZipcodeMatch": "nomatch",
+      "phoneStateMatch": "nomatch",
+      "phoneNameMatch": "nomatch",
+      "phoneAddressMatch": "nomatch",
+      "overallLevel": "high",
+      "persona_email_reputation": "high",
+      "persona_email_is_suspicious": "false",
+      "persona_email_is_spam": "false",
+      "persona_email_is_disposable": "false",
+      "persona_phone_risk_level": "medium-low",
+      "persona_phone_risk_recommendation": "allow",
+      "persona_address_has_match": "true",
+      "persona_database_identity_comparison_status": "failed",
+      "cheq_riskLabel": "low_risk",
+      "cheq_is_vpn_confirmed": "false",
+      "cheq_is_vpn_suspect": "false",
+      "cheq_is_tor": "false",
+      "cheq_is_hosting": "false",
+      "cheq_is_corporate": "false",
+      "cheq_is_mobile": "false",
+      "cheq_geo_country": "",
+      "cheq_risk_network_non_us": "false",
+      "cheq_risk_distance": "false",
+      "cheq_risk_unknown_email": "true",
+      "applicant_geo_type": "domestic",
+      "campus": "onground"
+    }
+  ]
+}

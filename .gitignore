@@ -205,3 +205,20 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# SST
+.sst/
+.open-next/
+
+# Node
+node_modules/
+package-lock.json
+
+# Model artifacts
+*.pkl
+
+# Data files
+*.csv
+
+# Predictions
+predictions.csv
