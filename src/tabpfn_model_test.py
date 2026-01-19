@@ -7,6 +7,8 @@ import warnings
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix, roc_auc_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import ModelVersion
 
@@ -14,6 +16,14 @@ from tabpfn.constants import ModelVersion
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
+
+def preprocess_features(X):
+    """Lowercase all string/bool columns."""
+    X = X.copy()
+    cols_to_fix = X.select_dtypes(include=['object', 'bool']).columns
+    for col in cols_to_fix:
+        X[col] = X[col].astype(str).str.lower()
+    return X
 
 def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
     """
@@ -28,15 +38,11 @@ def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
     df = pd.read_csv(data_path)
     print(f"Data successfully loaded. Total rows: {len(df)}")
 
-    # Preprocessing: Lowercase string/bool columns (excluding target)
+    # Separate features and target
     X = df.drop(columns=[target_col])
     y = df[target_col].map({"N": 0, "Y": 1})
-
-    cols_to_fix = X.select_dtypes(include=['object', 'bool']).columns
-    for col in cols_to_fix:
-        X[col] = X[col].astype(str).str.lower()
     
-    print(f"Preprocessing complete: {len(cols_to_fix)} columns lowercased.")
+    print(f"Features: {X.shape[1]} columns, Target: {y.value_counts().to_dict()}")
 
     # 3. Split Data
     X_train, X_test, y_train, y_test = train_test_split(
@@ -44,7 +50,6 @@ def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
     )
 
     # 4. Initialize Device and Model
-    # TabPFN is a Transformer model; CUDA is highly recommended for speed.
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
@@ -54,12 +59,17 @@ def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
         ignore_pretraining_limits=True
     )
 
-    # 5. Fit and Predict
-    # TabPFN 'fit' is instantaneous as it's a Prior-Data Fitted Network
-    clf.fit(X_train, y_train)
+    # 5. Create Pipeline with preprocessing + model
+    pipeline = Pipeline([
+        ('preprocessor', FunctionTransformer(preprocess_features, validate=False)),
+        ('classifier', clf)
+    ])
+    
+    print("Training pipeline (preprocessing + TabPFN)...")
+    pipeline.fit(X_train, y_train)
     
     # Get probabilities for the positive class (1)
-    y_prob = clf.predict_proba(X_test)[:, 1]
+    y_prob = pipeline.predict_proba(X_test)[:, 1]
     
     # Apply manual threshold
     y_pred = (y_prob >= threshold).astype(int)
@@ -82,16 +92,16 @@ def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
     print(f"TN (Correct Non-Fraud) : {tn}")
     print("="*30)
 
-    return clf
+    return pipeline
 
 # --- EXECUTION ---
-DATA_PATH = "all_three_provider_3k_dt_new.csv"
+DATA_PATH = "../all_three_provider_3k_dt_new.csv"
 TARGET_COLUMN = "farc_label"
 
 # Run the function
-model = run_tabpfn_pipeline(DATA_PATH, TARGET_COLUMN, threshold=0.5)
+pipeline = run_tabpfn_pipeline(DATA_PATH, TARGET_COLUMN, threshold=0.5)
 
-# Save the model
-joblib.dump(model, "tabpfn_model.pkl")
-print("\nModel saved as 'tabpfn_model.pkl'")
+# Save the pipeline (includes preprocessing + model)
+joblib.dump(pipeline, "tabpfn_model.pkl")
+print("\nPipeline saved as 'tabpfn_model.pkl' (preprocessing + model bundled)")
 

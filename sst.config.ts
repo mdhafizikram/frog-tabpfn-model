@@ -24,21 +24,52 @@ export default $config({
     const { execSync } = await import("child_process");
 
     const appName = $app.name;
-    const stage = $app.stage;
-    const region = "us-west-2";
     const srcPath = path.join($cli.paths.root, "src");
-    const awsDlcImage = `763104351884.dkr.ecr.${region}.amazonaws.com/pytorch-inference:2.1.0-gpu-py310`;
+
+    // Validate Docker image URI
+    const dockerImageUri = process.env.DOCKER_IMAGE_URI;
+    if (!dockerImageUri) {
+      throw new Error(
+        "DOCKER_IMAGE_URI not set. Run './build-and-push.sh' first and add the URI to .env file.",
+      );
+    }
+
+    // Get image digest to force model updates when image changes
+    let imageDigest = "unknown";
+    try {
+      const digestOutput = execSync(
+        `aws ecr describe-images --repository-name tabpfn-fraud-detection --image-ids imageTag=latest --region us-west-2 --profile ${process.env.AWS_PROFILE || "asu-frog-sandbox"} --query 'imageDetails[0].imageDigest' --output text`,
+        { stdio: "pipe" }
+      ).toString().trim();
+      // Extract only alphanumeric characters from digest
+      imageDigest = digestOutput.replace(/[^a-zA-Z0-9]/g, "").substring(0, 12);
+    } catch (error) {
+      console.warn("Could not get image digest, using timestamp");
+      imageDigest = Date.now().toString();
+    }
+
+    // Validate model file exists
+    const modelPath = path.join(srcPath, "tabpfn_model.pkl");
+    if (!fs.existsSync(modelPath)) {
+      throw new Error(
+        `Model file not found at ${modelPath}. Run 'cd src && python3 tabpfn_model_test.py' first.`,
+      );
+    }
 
     const modelBucket = new sst.aws.Bucket(`${appName}-models`, {
       public: false,
     });
 
-    // Build model.tar.gz directly (SageMaker expects: model.pkl at root + code/ folder)
+    // Build model.tar.gz (SageMaker expects: model.pkl at root)
     const modelTarPath = path.join(srcPath, "model.tar.gz");
-    execSync(
-      `cd "${srcPath}" && tar -czf model.tar.gz tabpfn_model.pkl --transform='s|sagemaker/|code/|' sagemaker/inference.py sagemaker/requirements.txt`,
-      { stdio: "pipe" }
-    );
+    try {
+      execSync(
+        `cd "${srcPath}" && tar -czf model.tar.gz tabpfn_model.pkl`,
+        { stdio: "pipe" },
+      );
+    } catch (error) {
+      throw new Error(`Failed to create model.tar.gz: ${error}`);
+    }
 
     const contentHash = crypto
       .createHash("md5")
@@ -46,6 +77,13 @@ export default $config({
       .digest("hex")
       .slice(0, 8);
     const modelS3Key = `models/tabpfn-model-${contentHash}.tar.gz`;
+
+    // Create combined version hash (image + model) to force updates when either changes
+    const versionHash = crypto
+      .createHash("md5")
+      .update(imageDigest + contentHash)
+      .digest("hex")
+      .slice(0, 8);
 
     // Upload model.tar.gz to S3
     const modelArtifact = new aws.s3.BucketObjectv2(
@@ -55,10 +93,10 @@ export default $config({
         key: modelS3Key,
         source: new pulumi.asset.FileAsset(modelTarPath),
         contentType: "application/gzip",
-      }
+      },
     );
 
-    // IAM role for SageMaker
+    // IAM role for SageMaker with least-privilege policies
     const sagemakerRole = new aws.iam.Role(`${appName}-sagemaker-role`, {
       assumeRolePolicy: JSON.stringify({
         Version: "2012-10-17",
@@ -72,12 +110,7 @@ export default $config({
       }),
     });
 
-    new aws.iam.RolePolicyAttachment(`${appName}-sagemaker-full`, {
-      role: sagemakerRole.name,
-      policyArn: "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess",
-    });
-
-    // S3 read policy for model artifacts
+    // S3 access for model artifacts
     new aws.iam.RolePolicy(`${appName}-s3-policy`, {
       role: sagemakerRole.name,
       policy: modelBucket.arn.apply((bucketArn: string) =>
@@ -90,49 +123,82 @@ export default $config({
               Resource: [bucketArn, `${bucketArn}/*`],
             },
           ],
-        })
+        }),
       ),
     });
 
-    // ECR pull policy for AWS DLC images
-    new aws.iam.RolePolicyAttachment(`${appName}-ecr-read`, {
+    // ECR access for Docker image
+    new aws.iam.RolePolicy(`${appName}-ecr-policy`, {
       role: sagemakerRole.name,
-      policyArn: "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: [
+              "ecr:GetAuthorizationToken",
+              "ecr:BatchCheckLayerAvailability",
+              "ecr:GetDownloadUrlForLayer",
+              "ecr:BatchGetImage",
+            ],
+            Resource: "*",
+          },
+        ],
+      }),
     });
 
-    new aws.iam.RolePolicyAttachment(`${appName}-cloudwatch`, {
+    // CloudWatch Logs access (scoped to SageMaker)
+    new aws.iam.RolePolicy(`${appName}-logs-policy`, {
       role: sagemakerRole.name,
-      policyArn: "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: [
+              "logs:CreateLogGroup",
+              "logs:CreateLogStream",
+              "logs:PutLogEvents",
+              "logs:DescribeLogStreams",
+            ],
+            Resource: "arn:aws:logs:*:*:log-group:/aws/sagemaker/*",
+          },
+        ],
+      }),
     });
 
     // Model S3 URI
     const modelDataUrl = $interpolate`s3://${modelBucket.name}/${modelS3Key}`;
 
-    // SageMaker Model using AWS pre-built container
+    // SageMaker Model using custom Docker container
     const sagemakerModel = new aws.sagemaker.Model(
       `${appName}-model`,
       {
+        name: `${appName}-model-${versionHash}`, // Include version hash to force updates
         executionRoleArn: sagemakerRole.arn,
         primaryContainer: {
-          image: awsDlcImage,
+          image: dockerImageUri,
           modelDataUrl: modelDataUrl,
           environment: {
-            SAGEMAKER_PROGRAM: "inference.py",
-            SAGEMAKER_SUBMIT_DIRECTORY: "/opt/ml/model/code",
             SAGEMAKER_CONTAINER_LOG_LEVEL: "20",
+            SAGEMAKER_MODEL_SERVER_TIMEOUT: "3600",
+            SAGEMAKER_MODEL_SERVER_WORKERS: "1",
+            OMP_NUM_THREADS: "4",
+            MKL_NUM_THREADS: "4",
           },
         },
       },
-      { dependsOn: [modelArtifact] }
+      { dependsOn: [modelArtifact] },
     );
 
     // SageMaker Endpoint Configuration
     const instanceType =
-      stage === "production" ? "ml.g5.xlarge" : "ml.g4dn.xlarge";
+      $app.stage === "production" ? "ml.g5.xlarge" : "ml.g4dn.xlarge";
 
     const endpointConfig = new aws.sagemaker.EndpointConfiguration(
       `${appName}-endpoint-config`,
       {
+        name: `${appName}-endpoint-config-${versionHash}`, // Include version hash to force updates
         productionVariants: [
           {
             variantName: "primary",
@@ -142,20 +208,23 @@ export default $config({
             initialVariantWeight: 1,
           },
         ],
-      }
+      },
     );
 
     // SageMaker Endpoint
     const endpoint = new aws.sagemaker.Endpoint(`${appName}-endpoint`, {
       endpointConfigName: endpointConfig.name,
+    }, { 
+      dependsOn: [endpointConfig],
+      replaceOnChanges: ["endpointConfigName"] // Force recreation when config changes
     });
 
     // Lambda function to invoke SageMaker endpoint
     const invokerLambda = new sst.aws.Function(`${appName}-invoker`, {
       handler: "src/lambda/invoker.handler",
       runtime: "nodejs20.x",
-      timeout: "60 seconds",
-      memory: "256 MB",
+      timeout: "900 seconds", // Increased for model loading + inference
+      memory: "512 MB",
       environment: {
         SAGEMAKER_ENDPOINT_NAME: endpoint.name,
       },
@@ -177,7 +246,7 @@ export default $config({
       endpointArn: endpoint.arn,
       apiUrl: api.url,
       modelDataUrl: modelDataUrl,
-      containerImage: awsDlcImage,
+      dockerImage: dockerImageUri,
       instanceType: instanceType,
       estimatedCost:
         instanceType === "ml.g4dn.xlarge" ? "~$0.73/hr" : "~$1.41/hr",

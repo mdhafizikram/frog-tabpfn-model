@@ -4,7 +4,9 @@ import {
 } from "@aws-sdk/client-sagemaker-runtime";
 import type { APIGatewayProxyHandlerV2 } from "aws-lambda";
 
-const client = new SageMakerRuntimeClient({});
+const client = new SageMakerRuntimeClient({
+  region: process.env.AWS_REGION,
+});
 const ENDPOINT_NAME = process.env.SAGEMAKER_ENDPOINT_NAME!;
 
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
@@ -33,13 +35,17 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
           : event.body
         : "{}";
 
+      console.log("Request body - /predict endpoint:", body);
+
       const command = new InvokeEndpointCommand({
         EndpointName: ENDPOINT_NAME,
         ContentType: "application/json",
-        Body: body,
+        Body: new TextEncoder().encode(body),
       });
 
       const response = await client.send(command);
+
+      console.log("SageMaker response - /predict endpoint:", response);
 
       const result = new TextDecoder().decode(response.Body);
 

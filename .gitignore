@@ -217,6 +217,10 @@ package-lock.json
 # Model artifacts
 *.pkl
 
+# Build artifacts
+.model-build/
+model.tar.gz
+
 # Data files
 *.csv
 

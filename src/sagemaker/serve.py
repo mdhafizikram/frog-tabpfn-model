@@ -1,113 +1,54 @@
 #!/usr/bin/env python3
 """
-SageMaker inference server for TabPFN model.
-Implements /ping and /invocations endpoints required by SageMaker.
+Simple Flask server for SageMaker inference.
 """
 import os
 import json
 import logging
-import joblib
-import pandas as pd
-import torch
-from flask import Flask, request, Response
+import threading
+from flask import Flask, request, jsonify
+import inference
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment setup for TabPFN
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
-
 app = Flask(__name__)
 
-# Global model variable
+# Model will be loaded on first request
+model_dir = os.environ.get("SM_MODEL_DIR", "/opt/ml/model")
 model = None
+model_lock = threading.Lock()
 
-def load_model():
-    """Load the TabPFN model from the model directory."""
+def get_model():
+    """Lazy load model on first request (thread-safe)"""
     global model
-    model_path = os.environ.get("MODEL_PATH", "/opt/ml/model/tabpfn_model.pkl")
-    
-    logger.info(f"Loading model from {model_path}")
-    logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
-    
-    model = joblib.load(model_path)
-    logger.info("Model loaded successfully")
+    if model is None:
+        with model_lock:
+            if model is None:  # Double-check after acquiring lock
+                logger.info(f"Loading model from {model_dir}...")
+                model = inference.model_fn(model_dir)
+                logger.info("Model loaded successfully")
     return model
 
 @app.route("/ping", methods=["GET"])
 def ping():
-    """Health check endpoint required by SageMaker."""
-    health = model is not None
-    status = 200 if health else 404
-    return Response(
-        response=json.dumps({"status": "healthy" if health else "unhealthy"}),
-        status=status,
-        mimetype="application/json"
-    )
+    """Health check endpoint"""
+    return jsonify({"status": "healthy"}), 200
 
 @app.route("/invocations", methods=["POST"])
 def invocations():
-    """Inference endpoint required by SageMaker."""
-    if model is None:
-        return Response(
-            response=json.dumps({"error": "Model not loaded"}),
-            status=503,
-            mimetype="application/json"
-        )
-    
+    """Inference endpoint"""
     try:
-        content_type = request.content_type
-        
-        if content_type == "application/json":
-            input_data = request.get_json()
-            data = input_data.get("data", input_data)
-            if isinstance(data, dict):
-                data = [data]
-        else:
-            return Response(
-                response=json.dumps({"error": f"Unsupported content type: {content_type}"}),
-                status=415,
-                mimetype="application/json"
-            )
-        
-        df = pd.DataFrame(data)
-        
-        # Preprocess: lowercase string/bool columns
-        cols_to_fix = df.select_dtypes(include=['object', 'bool']).columns
-        for col in cols_to_fix:
-            df[col] = df[col].astype(str).str.lower()
-        
-        logger.info(f"Running inference on {len(df)} samples")
-        
-        # Run prediction
-        predictions = model.predict(df).tolist()
-        probabilities = model.predict_proba(df)[:, 1].tolist()
-        
-        result = {
-            "predictions": predictions,
-            "probabilities": probabilities
-        }
-        
-        logger.info(f"Inference complete: {len(predictions)} predictions")
-        
-        return Response(
-            response=json.dumps(result),
-            status=200,
-            mimetype="application/json"
-        )
-        
+        current_model = get_model()
+        content_type = request.content_type or "application/json"
+        request_body = request.data.decode('utf-8') if isinstance(request.data, bytes) else request.data
+        input_data = inference.input_fn(request_body, content_type)
+        prediction = inference.predict_fn(input_data, current_model)
+        response_body, response_type = inference.output_fn(prediction, "application/json")
+        return response_body, 200, {"Content-Type": response_type}
     except Exception as e:
-        logger.error(f"Inference error: {str(e)}")
-        return Response(
-            response=json.dumps({"error": str(e)}),
-            status=500,
-            mimetype="application/json"
-        )
+        logger.error(f"Prediction error: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    load_model()
     app.run(host="0.0.0.0", port=8080)

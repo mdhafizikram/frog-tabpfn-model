@@ -1,5 +1,0 @@
-tabpfn
-pandas
-scikit-learn
-flask
-gunicorn
