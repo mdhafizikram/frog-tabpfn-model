@@ -24,16 +24,24 @@ os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
 
 
 def model_fn(model_dir):
-    """Load model from the model_dir (required by SageMaker)."""
-    model_path = os.path.join(model_dir, "tabpfn_model.pkl")
-    logger.info(f"Loading model from {model_path}")
+    """Load fitted TabPFN model (required by SageMaker)."""
+    from tabpfn.model_loading import load_fitted_tabpfn_model
+    
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+        logger.info(f"CUDA device name: {torch.cuda.get_device_name(0)}")
     
-    model = joblib.load(model_path)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Loading model on device: {device}")
+    
+    classifier = load_fitted_tabpfn_model(
+        os.path.join(model_dir, "tabpfn_classifier.tabpfn_fit"), 
+        device=device
+    )
+    
     logger.info("Model loaded successfully")
-    return model
+    return classifier
 
 
 def input_fn(request_body, request_content_type):
@@ -48,15 +56,17 @@ def input_fn(request_body, request_content_type):
 
 
 def predict_fn(input_data, model):
-    """Run prediction (required by SageMaker)."""
-    logger.info(f"Running inference on {len(input_data)} samples")
+    """Run prediction using fitted model (required by SageMaker)."""
+    import time
+    logger.info(f"Prediction started for {len(input_data)} records")
+    start = time.time()
+    
     df = pd.DataFrame(input_data)
+    X_processed = preprocess_features(df)
+    predictions = model.predict(X_processed).tolist()
+    probabilities = model.predict_proba(X_processed)[:, 1].tolist()
     
-    # Pipeline handles preprocessing automatically
-    predictions = model.predict(df).tolist()
-    probabilities = model.predict_proba(df)[:, 1].tolist()
-    
-    logger.info(f"Inference complete: {len(predictions)} predictions")
+    logger.info(f"Prediction completed in {time.time() - start:.2f}s")
     return {"predictions": predictions, "probabilities": probabilities}
 
 

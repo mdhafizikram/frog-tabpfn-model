@@ -49,7 +49,7 @@ export default $config({
     }
 
     // Validate model file exists
-    const modelPath = path.join(srcPath, "tabpfn_model.pkl");
+    const modelPath = path.join(srcPath, "sagemaker", "tabpfn_classifier.tabpfn_fit");
     if (!fs.existsSync(modelPath)) {
       throw new Error(
         `Model file not found at ${modelPath}. Run 'cd src && python3 tabpfn_model_test.py' first.`,
@@ -60,11 +60,11 @@ export default $config({
       public: false,
     });
 
-    // Build model.tar.gz (SageMaker expects: model.pkl at root)
+    // Build model.tar.gz (SageMaker expects: tabpfn_classifier.tabpfn_fit at root)
     const modelTarPath = path.join(srcPath, "model.tar.gz");
     try {
       execSync(
-        `cd "${srcPath}" && tar -czf model.tar.gz tabpfn_model.pkl`,
+        `cd "${srcPath}/sagemaker" && tar -czf ../model.tar.gz tabpfn_classifier.tabpfn_fit`,
         { stdio: "pipe" },
       );
     } catch (error) {

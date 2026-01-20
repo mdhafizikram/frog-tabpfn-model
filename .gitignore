@@ -216,6 +216,7 @@ package-lock.json
 
 # Model artifacts
 *.pkl
+*.tabpfn_fit
 
 # Build artifacts
 .model-build/

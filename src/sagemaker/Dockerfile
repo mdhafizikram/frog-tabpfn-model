@@ -1,5 +1,5 @@
 # Optimized SageMaker container for TabPFN inference
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+FROM pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,4 +37,4 @@ HEALTHCHECK CMD curl -f http://localhost:8080/ping || exit 1
 
 # Use gunicorn to serve the Flask app
 WORKDIR /opt/ml/code
-ENTRYPOINT ["gunicorn", "-b", "0.0.0.0:8080", "-w", "1", "--timeout", "900", "--graceful-timeout", "900", "serve:app"]
+ENTRYPOINT ["gunicorn", "-b", "0.0.0.0:8080", "-w", "1", "--timeout", "1800", "--graceful-timeout", "1800", "serve:app"]

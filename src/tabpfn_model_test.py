@@ -97,11 +97,14 @@ def run_tabpfn_pipeline(data_path, target_col, threshold=0.5):
 # --- EXECUTION ---
 DATA_PATH = "../all_three_provider_3k_dt_new.csv"
 TARGET_COLUMN = "farc_label"
+MODEL_OUTPUT_PATH = "sagemaker/tabpfn_classifier.tabpfn_fit"
 
 # Run the function
 pipeline = run_tabpfn_pipeline(DATA_PATH, TARGET_COLUMN, threshold=0.5)
 
-# Save the pipeline (includes preprocessing + model)
-joblib.dump(pipeline, "tabpfn_model.pkl")
-print("\nPipeline saved as 'tabpfn_model.pkl' (preprocessing + model bundled)")
+# Save fitted model
+from tabpfn.model_loading import save_fitted_tabpfn_model
+
+save_fitted_tabpfn_model(pipeline.named_steps['classifier'], MODEL_OUTPUT_PATH)
+print(f"\nModel saved: '{MODEL_OUTPUT_PATH}'")
 
